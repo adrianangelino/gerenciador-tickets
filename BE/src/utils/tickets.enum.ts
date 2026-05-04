@@ -1,0 +1,23 @@
+export enum TicketPriority {
+  LOW = 'LOW',
+  MEDIUM = 'MEDIUM',
+  HIGH = 'HIGH',
+}
+
+export enum TicketStatus {
+  PENDING = 'PENDING',
+  OPEN = 'OPEN',
+  IN_PROGRESS = 'IN_PROGRESS',
+  CONCLUDED = 'CONCLUDED',
+  CLOSED = 'CLOSED',
+  FAILED = 'FAILED',
+}
+
+export enum TicketAction {
+  CREATED = 'CREATED',
+  UPDATED = 'UPDATED',
+  STATUS_CHANGED = 'STATUS_CHANGED',
+  PRIORITY_CHANGED = 'PRIORITY_CHANGED',
+  PROCESSING_FAILED = 'PROCESSING_FAILED',
+  DELETED = 'DELETED',
+}

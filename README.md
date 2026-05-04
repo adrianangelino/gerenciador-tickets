@@ -1,98 +1,173 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Gerenciador de Tickets
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Sistema de gerenciamento de tickets com processamento assíncrono via fila, SLA configurável e autenticação JWT.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Stack
 
-## Description
+**Back-end:** NestJS · Prisma · PostgreSQL · BullMQ · Redis · JWT  
+**Front-end:** React · Vite · TypeScript · Tailwind CSS  
+**Infra:** Docker · docker-compose
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Como rodar
 
-## Project setup
+### Pré-requisitos
+- Docker e docker-compose instalados
 
-```bash
-$ npm install
+### 1. Configure o `.env` na raiz do projeto
+
+```env
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=sua_senha
+POSTGRES_DB=gerenciador_tickets
+
+JWT_SECRET=gere_com_openssl_rand_hex_32
+JWT_TTL=3600
+
+ADMIN_EMAIL=admin@seudominio.com
+ADMIN_PASSWORD=senha_forte_aqui
+
+CORS_ORIGIN=http://localhost
 ```
 
-## Compile and run the project
+### 2. Suba os containers
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+docker compose up --build -d
 ```
 
-## Run tests
+A aplicação estará disponível em:
+- **API:** http://localhost:3000
+- **Front-end:** http://localhost
 
-```bash
-# unit tests
-$ npm run test
+### Rotas principais
 
-# e2e tests
-$ npm run test:e2e
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| POST | /user/register | Cadastro de usuário |
+| POST | /user/login | Login |
+| POST | /user/logout | Logout (invalida sessão no Redis) |
+| GET | /tickets/getAllTickets | Lista todos os tickets |
+| POST | /tickets/createTicket | Cria ticket (processamento via fila) |
+| PATCH | /tickets/updateTicket/:id | Atualiza ticket |
+| DELETE | /tickets/SoftDeleteById/:id | Remove ticket (soft delete) |
+| GET | /sla/configs | Lista configurações de SLA |
+| POST | /sla/config | Cria configuração de SLA |
+| PATCH | /sla/config/:priority | Atualiza SLA por prioridade |
 
-# test coverage
-$ npm run test:cov
-```
+---
 
-## Deployment
+## Perguntas Técnicas
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+### 1. Integração Resiliente
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+> Como você desenharia uma integração com uma API externa que possui rate limiting e instabilidade ocasional?
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+Desacoplaria a integração da requisição HTTP usando uma fila (BullMQ, RabbitMQ). O fluxo seria: a API recebe o pedido, persiste o estado como `PENDENTE` e enfileira o job — a resposta ao cliente é imediata, sem depender da API externa.
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+O worker consome a fila com retry automático e backoff exponencial. Se a API externa retornar 429 (rate limit), o job aguarda e tenta novamente; se retornar 5xx, reexecuta até esgotar as tentativas. Após todas as tentativas, o ticket vai para dead-letter e uma alerta é disparado.
 
-## Resources
+Para o rate limiting especificamente, mantenho um contador no Redis com TTL alinhado à janela da API externa — antes de cada chamada, verifico se ainda tenho cota. Se não tiver, o job é recolocado na fila com delay calculado. O sistema continua funcional para o usuário final independente da estabilidade da integração.
 
-Check out a few resources that may come in handy when working with NestJS:
+Esse é exatamente o padrão que apliquei neste projeto para o processamento de tickets: criação síncrona + ativação assíncrona via BullMQ com 3 tentativas e backoff exponencial de 2s.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+---
 
-## Support
+### 2. Refinamento de Requisito
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+> Ao receber uma demanda vaga da área de negócio, quais etapas você segue para transformá-la em uma especificação técnica pronta para desenvolvimento?
 
-## Stay in touch
+Primeiro entendo o problema real, não a solução sugerida. Faço perguntas objetivas: quem usa, qual dor resolve, qual o critério de sucesso, o que acontece se não fizermos.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+Com isso em mãos, escrevo os casos de uso em linguagem simples — o que o usuário pode fazer, o que o sistema deve fazer em resposta, o que acontece nos casos de erro. Cada caso de uso vira um critério de aceite verificável.
 
-## License
+Depois decomponho em tarefas técnicas priorizadas por dependência: modelo de dados primeiro, depois regras de negócio, depois interface. Qualquer ambiguidade que surgir vira uma pergunta de volta para o negócio antes de codar — nunca assumas intenção, sempre valide.
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+A especificação só está pronta quando consigo responder: "como vou saber que isso está funcionando corretamente?"
+
+---
+
+### 3. Idempotência
+
+> Em uma API de pagamentos ou pedidos, como você evita processamento duplicado em caso de retentativas do cliente?
+
+O cliente gera uma chave de idempotência (UUID v4) e envia no header `Idempotency-Key` de toda requisição de escrita. No servidor, antes de processar, verifico essa chave no Redis com TTL de 24 horas.
+
+Se a chave não existe: processo normalmente, persisto o resultado no Redis junto com a chave e retorno a resposta.  
+Se a chave já existe: retorno o resultado que estava armazenado, sem reprocessar nada.
+
+Isso garante que mesmo que o cliente envie a mesma requisição 10 vezes (por timeout, falha de rede ou bug), o efeito colateral acontece apenas uma vez. Para pagamentos, combino isso com uma constraint única no banco na combinação `(pedido_id, status = 'PAGO')` — dupla proteção em camadas diferentes.
+
+---
+
+### 4. Síncrono vs. Assíncrono
+
+> Quais critérios definem se um fluxo deve ser resolvido imediatamente ou processado em fila?
+
+Uso três perguntas para decidir:
+
+**O cliente precisa do resultado agora para continuar?** Login, consulta de saldo, validação de formulário — tudo isso precisa de resposta imediata. Vai síncrono.
+
+**O processamento pode falhar e precisa de retry?** Envio de e-mail, integração com API externa, geração de relatório — qualquer coisa que depende de terceiros ou que seja demorada vai para fila. Erro em worker não afeta o cliente.
+
+**O volume pode criar gargalo na API?** Se 1000 usuários criarem um pedido ao mesmo tempo e cada pedido disparar 5 operações pesadas, o sistema trava. Fila distribui essa carga no tempo.
+
+Neste projeto, a criação de ticket é síncrona (persiste imediato, responde ao cliente), mas a ativação é assíncrona (BullMQ muda status para OPEN em background). O cliente vê o ticket criado instantaneamente; o processamento acontece sem bloqueio.
+
+---
+
+### 5. Segurança
+
+> Quais controles mínimos de segurança você aplica em uma API exposta publicamente?
+
+**Autenticação e sessão:** JWT com secret forte (nunca hardcoded), sessão armazenada no Redis para permitir invalidação imediata no logout — JWT puro não tem revogação, por isso o Redis é essencial.
+
+**Senhas:** bcrypt com fator 10+. Nunca armazeno senha em plaintext ou com hash reversível.
+
+**Entrada de dados:** Validação estrita com whitelist (class-validator + `whitelist: true` no NestJS) — campo não declarado no DTO é descartado antes de chegar na service.
+
+**CORS:** restrito ao domínio real da aplicação, nunca `*` em produção.
+
+**Segredos:** tudo em variáveis de ambiente, nunca commitado. JWT_SECRET, senhas de banco, API keys — todos no `.env` fora do repositório.
+
+**Princípio do menor privilégio:** rotas administrativas com guard de role, usuário comum não acessa o que não precisa.
+
+Esses são os controles base. Dependendo do contexto, adiciono rate limiting por IP, auditoria de ações sensíveis e rotação periódica de secrets.
+
+---
+
+### 6. Qualidade e Entrega
+
+> Como você decide o que é essencial para o MVP e o que vira débito técnico?
+
+MVP é o menor conjunto de funcionalidades que permite validar se o produto resolve o problema real do usuário. Tudo que não bloqueia essa validação pode esperar.
+
+Minha régua: **se o sistema não funciona sem isso, é MVP**. Se funciona mas de forma menos elegante ou menos escalável, é débito técnico.
+
+Exemplos práticos neste projeto:
+- Criar, listar, atualizar e remover tickets com SLA — **MVP**
+- Autenticação e controle de acesso — **MVP** (segurança não é opcional)
+- Testes automatizados — **débito técnico** (valida lógica, mas não impede entrega inicial)
+- Paginação na listagem — **débito técnico** (funciona sem, mas vai travar com volume)
+- Observabilidade (métricas, tracing) — **débito técnico**
+
+O débito técnico não é problema se for consciente e documentado. O problema é acumular débito sem saber que ele existe.
+
+---
+
+### 7. Governança e IA
+
+> Como utilizar IA para acelerar o desenvolvimento sem comprometer segurança dos dados e qualidade do código?
+
+IA é uma ferramenta de aceleração, não de substituição. Uso para boilerplate, pesquisa de padrões, revisão de código e geração de casos de teste — mas o entendimento e a responsabilidade são sempre meus.
+
+Algumas regras que sigo:
+
+**Nunca colocar no contexto da IA:** secrets, dados de produção, PII de clientes, credenciais. O que entra no prompt pode sair de formas inesperadas.
+
+**Todo código gerado passa pela minha revisão:** entendo o que foi gerado antes de commitar. Código que não entendo não vai para produção — IA pode gerar código funcional mas inseguro ou que não escala.
+
+**Validação de tipos e testes são meus:** a IA ajuda a escrever, mas quem define os critérios de correção sou eu. `any` e ausência de `Promise<T>` são exemplos do que ela deixa passar se você não revisar.
+
+**Propriedade do código é da equipe:** uso IA para acelerar, não para terceirizar o raciocínio. O time precisa entender o que está no repositório — código gerado sem compreensão vira débito técnico invisível.
+
+O ganho real está em reduzir o tempo nas partes repetitivas e ter mais energia para as decisões que realmente importam.
